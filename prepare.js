@@ -101,7 +101,7 @@ const SKIP_CAT = /by (country|continent|year|decade|century|region|state|city|lo
 
 const PER_SET_CAP = 6000;   // candidates per set, before the quality rules
 const TOTAL_CAP = 18000;    // candidates in all
-const FOREST_SIZE = 5000;   // articles that grow, after the rules
+const FOREST_SIZE = 1000;   // articles that grow, after the rules
 const PAGES_PER_CAT = 400;
 const SUBCATS_PER_CAT = 35;
 const PAGES_PER_SUBCAT = 80;
@@ -113,7 +113,7 @@ async function api(params) {
   for (let attempt = 0; attempt < 6; attempt++) {
     try {
       await sleep(REQUEST_GAP_MS);
-      const res = await fetch(`${API}?${qs}`, { headers: { 'User-Agent': UA, 'Api-User-Agent': UA } });
+      const res = await fetch(`${API}?${qs}`, { headers: { 'User-Agent': UA, 'Api-User-Agent': UA }, signal: AbortSignal.timeout(20000) });
       if (res.status === 429) {
         const wait = Number(res.headers.get('retry-after')) || 10 * (attempt + 1);
         console.log(`  rate limited, waiting ${wait}s…`);
@@ -313,6 +313,26 @@ async function fetchMeta(titles) {
   return meta;
 }
 
+// How widely read each article is: page views over the last 60 days.
+async function fetchViews(titles) {
+  const views = {};
+  for (let i = 0; i < titles.length; i += 50) {
+    const batch = titles.slice(i, i + 50);
+    let cont = {};
+    for (let page = 0; page < 10; page++) {
+      const data = await api({ action: 'query', prop: 'pageviews', pvipdays: 60, titles: batch.join('|'), ...cont });
+      for (const p of (data && data.query && data.query.pages) || []) {
+        if (!p.pageviews) continue;
+        views[p.title] = Object.values(p.pageviews).reduce((a, b) => a + (b || 0), 0);
+      }
+      if (!data || !data.continue) break;
+      cont = data.continue;
+    }
+    if ((i / 50) % 20 === 0) console.log(`  views ${Math.min(i + 50, titles.length)}/${titles.length}`);
+  }
+  return views;
+}
+
 // ------------------------------------------------------- what may grow -----
 // Rules for an article to grow in the forest (the browser applies the same
 // ones to planting):
@@ -336,6 +356,9 @@ const THEMES = [
 ];
 // Categories that name-check a theme without meaning it (label rosters, fame).
 const NOISE = /records artists|internet memes|internet[- ]related controversies|internet culture|internet characters|internet properties|internet celebrities|youtubers|streamers|vtubers|retailers/i;
+
+// Popular but beside the point: entertainment, news, business, law, illness.
+const OFF_THEME = /video games|anime|manga|television (series|programs)|data breaches|controvers|incidents|\b(19|20)\d\ds? in |business|management|\blaw\b|occupations|executives|diseases|disorders|sexual|erotic|brands|marketing|finance|military|weapons|terroris|crime|scandal|elections|politic|pornograph|suicide|deaths|disasters|accidents|attacks|murder|killing|drugs|medications|pharmac|steroids|vehicle|automotive/i;
 
 function bridgesThemes(cats) {
   const own = cats.filter(c => !PERSON.test(c) && !COMPANY.test(c) && !NOISE.test(c));
@@ -377,7 +400,9 @@ function colourMix(title, mask, cats) {
 // scattered all over it, every theme everywhere. Water, wilderness paths and
 // thickets run between them.
 
-const W = 2080, HGT = 2080;
+const W = 1040, HGT = 1040;
+// Rivers, ponds and trails follow a hand-drawn sketch, SKETCH units square.
+const SKETCH = 1184;
 const CIRCLES = []; // no theme regions any more; kept so the browser sees none
 const BLOCK = 4;    // terrain is drawn in 4px blocks
 const GW = W / BLOCK, GH = HGT / BLOCK;
@@ -402,6 +427,7 @@ const SPRITE_PX = SPRITES.map(rows => {
 const F_NONE = 0, F_VEG = 1, F_VEG_DEEP = 2, F_WATER = 3, F_WATER_LIGHT = 4, F_SAND = 5, F_PATH = 6, F_BRIDGE = 7, F_PATH_FADE = 8;
 const BANDS = 6;
 const isWet = f => f === F_WATER || f === F_WATER_LIGHT;
+const fromSketch = p => p.map(([x, y]) => [x * GW / SKETCH, y * GH / SKETCH]);
 
 function makeNoise(seed) {
   const r = mulberry32(seed);
@@ -457,7 +483,7 @@ function makeTerrain() {
   const hs = new Float32Array(GW * GH);
   let lo = 1, hi = 0;
   for (let y = 0; y < GH; y++) for (let x = 0; x < GW; x++) {
-    const h = fbm(n, x / 48, y / 48);
+    const h = fbm(n, x / 32, y / 32);
     hs[y * GW + x] = h; lo = Math.min(lo, h); hi = Math.max(hi, h);
   }
   for (let i = 0; i < hs.length; i++) band[i] = Math.min(BANDS - 1, Math.floor(((hs[i] - lo) / (hi - lo)) * BANDS));
@@ -481,24 +507,23 @@ function makeTerrain() {
     for (let k = 0; k < 9; k++) stamp(cx + (rand() - 0.5) * r * 1.4, cy + (rand() - 0.5) * r, r * (0.55 + rand() * 0.35));
   };
 
-  // A river across the park from north to south, a creek joining it from the
-  // east, and a second stream that ends in a lake.
-  river([[150, -4], [182, 110], [138, 240], [205, 372], [168, GH + 4]], 3.2, 6, 70);
-  river([[GW + 4, 150], [420, 176], [330, 212], [240, 236], [170, 244], [134, 246]], 1.7, 4, 46);
-  river([[GW + 4, 432], [440, 418], [380, 404]], 1.6, 3, 40);
-  pond(366, 402, 11);
-  // Ponds scattered here and there.
-  for (let k = 0, placed = 0; k < 200 && placed < 7; k++) {
-    const x = 40 + rand() * (GW - 80), y = 40 + rand() * (GH - 80);
-    let clear = true;
-    for (let dy = -16; dy <= 16 && clear; dy += 4) for (let dx = -16; dx <= 16 && clear; dx += 4) {
-      const xx = Math.round(x + dx), yy = Math.round(y + dy);
-      if (xx >= 0 && yy >= 0 && xx < GW && yy < GH && isWet(feat[yy * GW + xx])) clear = false;
-    }
-    if (!clear) continue;
-    pond(x, y, 3 + rand() * 3.5);
-    placed++;
-  }
+  // Laid out after a hand-drawn sketch (SKETCH units across the park): a long
+  // river from west to east with a branch running south into a big pond, and
+  // streams that end in ponds.
+  const pondAt = (x, y, r) => pond(x * GW / SKETCH, y * GH / SKETCH, r);
+  river(fromSketch([[-20, 80], [90, 80], [130, 125], [195, 215], [230, 180], [310, 120], [370, 125], [430, 190], [495, 235], [560, 250], [660, 320], [760, 345], [830, 370], [870, 360], [960, 330], [1040, 250], [1150, 215], [1204, 205]]), 2.4, 1.5, 30);
+  river(fromSketch([[495, 240], [455, 275], [430, 320], [400, 345], [385, 400], [362, 460], [366, 540]]), 1.6, 1.2, 26);
+  pondAt(370, 590, 9);
+  river(fromSketch([[680, -20], [705, 30], [750, 50], [790, 75], [850, 85], [900, 72], [965, 88]]), 1.6, 1.2, 26);
+  pondAt(985, 85, 5);
+  pondAt(105, 370, 4);
+  river(fromSketch([[-20, 890], [30, 880], [100, 885], [150, 905], [200, 895], [275, 898]]), 1.6, 1.2, 26);
+  pondAt(305, 900, 5.5);
+  pondAt(815, 770, 7.5);
+  river(fromSketch([[800, 815], [765, 860], [742, 950], [725, 1000], [715, 1060], [692, 1130], [700, 1204]]), 1.7, 1.2, 26);
+  pondAt(970, 585, 5);
+  river(fromSketch([[990, 598], [1060, 632], [1100, 700], [1115, 760], [1110, 880], [1100, 960], [1092, 1040]]), 1.6, 1.2, 26);
+  pondAt(1100, 1085, 5.5);
 
   for (let y = 1; y < GH - 1; y++) for (let x = 1; x < GW - 1; x++) {
     const i = y * GW + x;
@@ -512,36 +537,20 @@ function makeTerrain() {
   return { band, feat, rivers };
 }
 
-// Wilderness paths: a few long, wide trails between far-apart groves (a tree
-// of trails plus the odd loop). They taper off at each end, narrowing and
-// fading into the grass. Where a trail meets a river it crosses on a plank
-// bridge laid straight across, square to the banks.
-function makePaths(terrain, groves) {
-  const { feat, rivers } = terrain;
-  const hubs = [];
-  for (const g of groves) {
-    if (hubs.every(h => Math.hypot(h.x - g.x, h.y - g.y) > 440)) hubs.push(g);
-  }
-  const d = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-  const edges = [];
-  const inTree = new Set([0]);
-  while (inTree.size < hubs.length) {
-    let best = null;
-    for (const i of inTree) for (let j = 0; j < hubs.length; j++) {
-      if (inTree.has(j)) continue;
-      const dd = d(hubs[i], hubs[j]);
-      if (!best || dd < best[2]) best = [i, j, dd];
-    }
-    inTree.add(best[1]);
-    edges.push(best);
-  }
-  for (let i = 0; i < hubs.length; i++) {
-    if (rand() > 0.06) continue;
-    const near = hubs.map((h, j) => [j, d(hubs[i], h)]).filter(([j]) => j !== i).sort((a, b) => a[1] - b[1]);
-    const [j, dd] = near[1] || [];
-    if (j !== undefined && dd < 700 && !edges.some(e => (e[0] === i && e[1] === j) || (e[0] === j && e[1] === i))) edges.push([i, j, dd]);
-  }
-
+// Wilderness trails, drawn from the sketch: a handful of long winding ones,
+// none joining another. They taper off at each end, narrowing and fading into
+// the grass.
+const TRAILS = [
+  [[340, 185], [260, 250], [210, 350], [200, 410], [185, 455]],
+  [[620, 130], [690, 140], [740, 165], [830, 180], [855, 220], [895, 240]],
+  [[510, 380], [540, 385], [570, 425], [620, 465], [660, 500], [700, 475], [760, 465], [800, 480], [880, 470], [920, 500], [1050, 490]],
+  [[118, 600], [160, 630], [160, 710], [200, 770], [222, 815]],
+  [[675, 668], [620, 720], [575, 775], [530, 805], [495, 868]],
+  [[1027, 717], [1005, 780], [1005, 830], [980, 880], [990, 920], [940, 1000], [820, 1070]],
+  [[110, 1005], [190, 990], [230, 1040], [300, 1078], [360, 1055], [470, 1080], [570, 1082], [603, 1060]],
+];
+function makePaths(terrain) {
+  const { feat } = terrain;
   const wetNear = (x, y, r) => {
     for (let yy = Math.floor(y - r); yy <= y + r; yy++) for (let xx = Math.floor(x - r); xx <= x + r; xx++) {
       if (xx >= 0 && yy >= 0 && xx < GW && yy < GH && isWet(feat[yy * GW + xx])) return true;
@@ -564,21 +573,14 @@ function makePaths(terrain, groves) {
   // No bridges: where a trail meets water it splits, and each dry stretch
   // fades in and out on its own, so trails trail off near the banks and pick
   // up again across the water. Short stretches are left out.
-  const WIDE = 1.7;        // brush radius in blocks: trails 3-4 blocks across
-  const MIN_STRETCH = 60;  // samples (half a block each): at least 30 blocks long
+  const WIDE = 1.4;        // brush radius in blocks: trails 3-4 blocks across
+  const MIN_STRETCH = 30;  // samples (half a block each): at least 15 blocks long
   let stretches = 0;
-  for (const [i, j] of edges) {
-    const a = hubs[i], b = hubs[j];
-    const len = d(a, b), ux = (b.x - a.x) / len, uy = (b.y - a.y) / len;
-    // Run from just inside one grove's edge to the other's, so the fading
-    // ends trail into the clearings.
-    const s0 = [(a.x + ux * a.r * 0.6) / BLOCK, (a.y + uy * a.r * 0.6) / BLOCK];
-    const e0 = [(b.x - ux * b.r * 0.6) / BLOCK, (b.y - uy * b.r * 0.6) / BLOCK];
-    const mid = [(s0[0] + e0[0]) / 2 + (rand() - 0.5) * len / BLOCK * 0.25, (s0[1] + e0[1]) / 2 + (rand() - 0.5) * len / BLOCK * 0.25];
+  for (const trail of TRAILS) {
     const parts = [];
     let cur = [];
-    for (const p of flowLine([s0, mid, e0], 0.5, 3, 40)) {
-      if (wetNear(p[0], p[1], 4)) { if (cur.length) parts.push(cur); cur = []; }
+    for (const p of flowLine(fromSketch(trail), 0.5, 1, 18)) {
+      if (wetNear(p[0], p[1], 3)) { if (cur.length) parts.push(cur); cur = []; }
       else cur.push(p);
     }
     if (cur.length) parts.push(cur);
@@ -592,7 +594,7 @@ function makePaths(terrain, groves) {
       stretches++;
     }
   }
-  return { hubs: hubs.length, trails: edges.length, stretches };
+  return { trails: TRAILS.length, stretches };
 }
 
 function makeLayout(list, terrain) {
@@ -639,6 +641,17 @@ function makeLayout(list, terrain) {
     const spread = 3.0 * Math.sqrt(chunk.length) + 3;
     return { chunk, spread, r: spread * 1.6 + 3 };
   });
+  const paths = makePaths(terrain);
+  // Keep a strip of grass beside every trail: no plant within a block of one.
+  for (let by = 0; by < GH; by++) for (let bx = 0; bx < GW; bx++) {
+    let near = 0;
+    for (let oy = -1; oy <= 1 && !near; oy++) for (let ox = -1; ox <= 1; ox++) {
+      const f = feat[Math.min(GH - 1, Math.max(0, by + oy)) * GW + Math.min(GW - 1, Math.max(0, bx + ox))];
+      if (f === F_PATH || f === F_PATH_FADE) { near = 1; break; }
+    }
+    besideTrail[by * GW + bx] = near;
+  }
+
   const placedGroves = [];
   for (const g of groves) {
     let best = null, bestD = -1;
@@ -653,17 +666,6 @@ function makeLayout(list, terrain) {
     if (!best) continue;
     g.x = Math.round(best[0]); g.y = Math.round(best[1]);
     placedGroves.push(g);
-  }
-
-  const paths = makePaths(terrain, placedGroves);
-  // Keep a strip of grass beside every trail: no plant within a block of one.
-  for (let by = 0; by < GH; by++) for (let bx = 0; bx < GW; bx++) {
-    let near = 0;
-    for (let oy = -1; oy <= 1 && !near; oy++) for (let ox = -1; ox <= 1; ox++) {
-      const f = feat[Math.min(GH - 1, Math.max(0, by + oy)) * GW + Math.min(GW - 1, Math.max(0, bx + ox))];
-      if (f === F_PATH || f === F_PATH_FADE) { near = 1; break; }
-    }
-    besideTrail[by * GW + bx] = near;
   }
 
   const articles = [];
@@ -717,7 +719,7 @@ function makeLayout(list, terrain) {
     remember(best[0], best[1]);
     articles.push([e.title, e.mask, best[0], best[1], ...e.mix, e.size]);
   }
-  console.log(`  ${loners.length} articles grow on their own; ${paths.trails} trails link ${paths.hubs} groves, in ${paths.stretches} stretches`);
+  console.log(`  ${loners.length} articles grow on their own; ${paths.trails} trails in ${paths.stretches} stretches`);
   if (dropped) console.log(`  (${dropped} articles found no room)`);
   return { articles, groves: placedGroves };
 }
@@ -819,20 +821,52 @@ function assignShapes(list) {
   });
   const bridgers = list.filter(e => meta[e.title].c.some(c => PERSON.test(c) || COMPANY.test(c)));
   console.log(`  ${list.length} articles qualify (${bridgers.length} of them people or companies bridging the themes); left out:`, dropped);
-  if (list.length > FOREST_SIZE) {
-    // Bridges first: articles in two or more sets, and the people and companies that bridge the themes.
-    const keep = new Set(bridgers);
-    const multi = list.filter(e => popcount(e.mask) > 1 || keep.has(e));
-    const single = shuffle(list.filter(e => popcount(e.mask) === 1 && !keep.has(e)));
-    list = multi.concat(single.slice(0, FOREST_SIZE - multi.length));
-    list.sort((a, b) => (a.title < b.title ? -1 : 1));
-  }
-
   for (const e of list) {
     const m = meta[e.title];
     e.mix = colourMix(e.title, e.mask, m.c);
     e.length = m.l;
   }
+
+  if (list.length > FOREST_SIZE) {
+    // Only the essentials grow. Curated bridges always; then the most widely
+    // read and most substantial articles, with a bonus for bridging sets, in
+    // equal shares by leading theme and mixed, and no more than a few from any
+    // one source category so every corner of the intersection shows up.
+    const need = list.map(e => e.title).filter(t => meta[t].pv === undefined);
+    if (need.length) {
+      console.log(`Reading page views for ${need.length} articles…`);
+      const views = await fetchViews(need);
+      for (const t of need) meta[t].pv = views[t] || 0;
+      fs.writeFileSync(metaFile, JSON.stringify(meta));
+    }
+    // What counts most is how many of the three themes an article reaches,
+    // from its sets and its own categories; popularity and length only break ties.
+    const reach = e => {
+      const text = [e.title, ...meta[e.title].c];
+      return popcount(e.mask | [0, 1, 2].reduce((m, k) => (text.some(c => THEMES[k].test(c)) ? m | (1 << k) : m), 0));
+    };
+    const score = e => 1.5 * reach(e) + 0.5 * Math.log10(meta[e.title].pv + 10) + 0.6 * Math.log10(e.length || 1);
+    const offTheme = e => meta[e.title].c.some(c => OFF_THEME.test(c));
+    const lead = e => (e.mix.filter(Boolean).length > 1 ? 3 : e.mix.indexOf(4));
+    const chosen = new Set(list.filter(e => e.group === 'bridge'));
+    const perGroup = {};
+    const queues = [0, 1, 2, 3].map(k => list.filter(e => lead(e) === k && !chosen.has(e) && !offTheme(e)).sort((a, b) => score(b) - score(a)));
+    const GROUP_CAP = 6;
+    for (let k = 0; chosen.size < FOREST_SIZE && queues.some(q => q.length); k = (k + 1) % 4) {
+      const q = queues[k];
+      while (q.length) {
+        const e = q.shift();
+        if ((perGroup[e.group] || 0) >= GROUP_CAP) continue;
+        perGroup[e.group] = (perGroup[e.group] || 0) + 1;
+        chosen.add(e);
+        break;
+      }
+    }
+    list = [...chosen].sort((a, b) => (a.title < b.title ? -1 : 1));
+    const leads = [0, 1, 2, 3].map(k => list.filter(e => lead(e) === k).length);
+    console.log(`  chose ${list.length}: ${leads[0]} nature, ${leads[1]} technology, ${leads[2]} human, ${leads[3]} mixed, from ${Object.keys(perGroup).length} categories`);
+  }
+
   if (process.argv.includes('--fetch-only')) { console.log('Fetched; stopping before layout.'); return; }
 
   const counts = {};

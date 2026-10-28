@@ -3,7 +3,7 @@
   'use strict';
 
   // Bump with index.html's ?v= tags when you publish changes, so browsers fetch fresh files.
-  const VERSION = '2026-10-23a';
+  const VERSION = '2026-10-28a';
   const CFG = window.WIKIPARK_CONFIG || {};
   const $ = s => document.querySelector(s);
   const canvas = $('#world');
@@ -413,6 +413,9 @@
 
   // -------------------------------------------------------- time of day ---
 
+  // For now it's always night. Set to false to bring back the day, which
+  // follows the visitor's local time.
+  const ALWAYS_NIGHT = true;
   let levelOverride = null;
   const OVERRIDES = [null, 0, 2, 4];
   const OVERRIDE_NAMES = ['time: local', 'time: day', 'time: dusk', 'time: night'];
@@ -432,7 +435,7 @@
 
   let level = 0;
   function updateLevel() {
-    level = levelOverride == null ? autoLevel() : levelOverride;
+    level = levelOverride != null ? levelOverride : ALWAYS_NIGHT ? 4 : autoLevel();
     const bg = level === 0 ? GROUND[0] : level === 4 ? NIGHT : rgbOf(shift(u32(GROUND[0]), level));
     document.body.style.backgroundColor = css(bg);
     updateClock();
@@ -1199,13 +1202,13 @@
       for (let k = 0; k < 40; k++) {
         const s = findSpot(rng, 6);
         if (!s) break;
-        if (secrets.wells.every(w => Math.hypot(w.x - s.x, w.y - s.y) > 600) || k === 39) {
+        if (secrets.wells.every(w => Math.hypot(w.x - s.x, w.y - s.y) > 350) || k === 39) {
           secrets.wells.push({ ...s, kind: WELL_KINDS[bit] });
           break;
         }
       }
     }
-    for (let k = 0; k < 5; k++) {
+    for (let k = 0; k < 3; k++) {
       const s = findSpot(rng, 8);
       if (s) secrets.rings.push(s);
     }
