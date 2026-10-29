@@ -1,9 +1,9 @@
-// Wiki Park: a pixel forest of Wikipedia articles, walked through together.
+// Parque Biblioteca: a pixel forest of Wikipedia articles, walked through together.
 (() => {
   'use strict';
 
   // Bump with index.html's ?v= tags when you publish changes, so browsers fetch fresh files.
-  const VERSION = '2026-10-28a';
+  const VERSION = '2026-10-29e';
   const CFG = window.WIKIPARK_CONFIG || {};
   const $ = s => document.querySelector(s);
   const canvas = $('#world');
@@ -39,7 +39,7 @@
   // Terrain: elevation terraces nudge the green channel; features are flat blocks.
   const BAND_G = [-10, -6, -2, 2, 6, 10];
   const VEG = [0, 112, 4], VEG_DEEP = [0, 92, 4];
-  const WATER = hex('#2c6c9c'), WATER_LIGHT = hex('#4c8cbc');
+  const WATER = hex('#3476a8'), WATER_LIGHT = hex('#5496c8');
   const SAND = hex('#be9b65');
   const PATH = hex('#a08a5e'), BRIDGE = hex('#8a6a44');
   // Lily pads: p/P pad, f flower.
@@ -534,7 +534,7 @@
         .insert({ ...row, secret_hash: await sha256hex(secret) })
         .select('id, article_title, x, y, created_at').single();
       if (error) {
-        console.warn('Wiki Park: lantern not saved', error);
+        console.warn('Parque Biblioteca: lantern not saved', error);
         const id = `local-${Date.now()}`;
         mine.set(id, 'local');
         addLantern({ ...row, id, created_at: created });
@@ -785,7 +785,7 @@
 
       // Plantings first, so lanterns on planted articles find their square.
       const planted = await sb.from('plantings').select('*').order('created_at').limit(20000);
-      if (planted.error) console.warn('Wiki Park: no plantings table yet', planted.error);
+      if (planted.error) console.warn('Parque Biblioteca: no plantings table yet', planted.error);
       else planted.data.forEach(addPlanting);
       sb.channel('wikipark-plantings')
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'plantings' }, p => addPlanting(p.new))
@@ -815,7 +815,7 @@
         });
       net.channel = ch;
     } catch (e) {
-      console.warn('Wiki Park: could not reach Supabase, walking solo.', e);
+      console.warn('Parque Biblioteca: could not reach Supabase, walking solo.', e);
       net.client = null; net.channel = null;
       loadLocalPlantings();
       loadLocalLanterns();
@@ -925,8 +925,10 @@
         warmBuf.fill(-1);
         toneBuf.fill(1);
         const me = myWorldPos();
-        addLight(me.x - ix, me.y - iy, 11, -1);
+        addLight(me.x - ix, me.y - iy, 13, -1);
         for (const o of others.values()) addLight(o.x - ix, o.y - iy, 5, -1);
+        // The library keeps a soft, cool light on all night.
+        if (secrets.library) addLight(secrets.library.x + 0.5 - ix, secrets.library.y + 0.5 - iy, 10, -1);
         for (const g of visibleLanterns) {
           addLight(g.x + 0.5 - ix, g.y + 0.5 - iy, g.r + 1 + Math.sin(ft / 480 + g.x * 0.7) * 0.7, g.tier);
         }
@@ -1117,12 +1119,27 @@
   // ancient tree) are placed from a fixed seed, so they're in the same spots
   // for everyone; the bottle, the owl and the deer come and go.
 
-  const secrets = { wells: [], rings: [], ancient: null, bottle: null, owl: null, deer: null, frog: null, bird: null,
+  const secrets = { library: null, wells: [], rings: [], ancient: null, bottle: null, owl: null, deer: null, frog: null, bird: null,
     nextBottle: 0, nextOwl: 0, nextDeer: 0, nextFrog: 0, nextBird: 0, warp: null };
 
   // Atlas Shrugged's first surviving edit is from 28 January 2001, two weeks
   // after Wikipedia began: one of its oldest articles.
   const ANCIENT = { title: 'Atlas Shrugged', since: '28 January 2001' };
+
+  // The library the park is named after, drawn like Medellín's Parque
+  // Biblioteca España: dark rock-like buildings on a hillside. It opens the
+  // article on library parks. New visitors start beside it.
+  const LIBRARY = { title: 'Library park (Colombia)' };
+  const LIBRARY_PX = [
+    '...ab..',
+    '..aab..',
+    '..awb.a',
+    'a.aabab',
+    'abawbab',
+    'abaabwb',
+    'ccccccc',
+  ];
+  const LIBRARY_COLOURS = { a: css(hex('#5c5c68')), b: css(hex('#3a3a44')), w: css(hex('#d0e8f4')), c: css(hex('#b0ac98')) };
 
   const WELL_KINDS = { 1: 'picture', 2: 'featured', 4: 'onthisday' };
   const STONE = [css(hex('#9c9a8c')), css(hex('#7e7c70'))];
@@ -1195,6 +1212,14 @@
 
   function placeSecrets() {
     const rng = seeded(2001);
+    // The library: the open spot nearest the middle of the park.
+    for (let d = 0; d < world.w / 2 && !secrets.library; d += 4) {
+      for (let k = 0; k < 24 && !secrets.library; k++) {
+        const a = (k / 24) * Math.PI * 2;
+        const x = Math.round(world.w / 2 + Math.cos(a) * d), y = Math.round(world.h / 2 + Math.sin(a) * d);
+        if (clearArea(x, y, 7)) { claim(x, y, 7); secrets.library = { x, y }; }
+      }
+    }
     // The ancient tree stands alone in an open patch.
     secrets.ancient = findSpot(rng, 12);
     // Three wells, well apart from one another.
@@ -1235,6 +1260,8 @@
     for (const w of secrets.wells) {
       if (near(w, ix, iy, 6)) drawSprite(WELL_PX, w.x - 3 - ix, w.y - 3 - iy, { '#': STONE[(w.x + w.y) & 1], o: WELL_WATER });
     }
+    const lib = secrets.library;
+    if (near(lib, ix, iy, 6)) drawSprite(LIBRARY_PX, lib.x - 3 - ix, lib.y - 3 - iy, LIBRARY_COLOURS);
     const t = secrets.ancient;
     if (near(t, ix, iy, 8)) drawSprite(ANCIENT_PX, t.x - 6 - ix, t.y - 6 - iy, { a: ANCIENT_COLOURS[0], b: ANCIENT_COLOURS[1], c: ANCIENT_COLOURS[2], d: ANCIENT_COLOURS[3] });
     const b = secrets.bottle;
@@ -1392,12 +1419,23 @@
     for (const w of secrets.wells) if (hit(w, 3)) return () => openWell(w);
     for (const r of secrets.rings) if (hit(r, 3)) return () => { if (!secrets.warp) startWarp(performance.now()); };
     const here = o => ({ x: Math.round(o.x), y: Math.round(o.y) });
+    if (hit(secrets.library, 4)) return () => openTitle(LIBRARY.title, '', here(secrets.library));
     if (hit(secrets.ancient, 6)) return () => openTitle(ANCIENT.title, `the ancient tree · first written ${ANCIENT.since}`, here(secrets.ancient));
     if (hit(secrets.bottle, 2)) return () => { const at = here(secrets.bottle); secrets.bottle = null; openBottle(at); };
     if (hit(secrets.owl, 2)) return () => { playSample('Tawny owl', hoot); openTitle('Owl', 'a night owl', here(secrets.owl)); };
     if (hit(secrets.frog, 2)) return () => { playSample('Common frog'); openTitle('Common frog', 'a frog by the water', here(secrets.frog)); };
     if (hit(secrets.bird, 2)) return () => { playSample('Common blackbird'); openTitle('Common blackbird', 'a blackbird', here(secrets.bird)); };
     if (hit(secrets.deer, 2)) return () => { playSample('Red deer'); openTitle('Deer', 'a deer', here(secrets.deer)); };
+    // A lantern left on something that has since moved on (an animal, the
+    // bottle, a well before a rebuild) still opens what it was left on.
+    for (const l of lanterns.values()) {
+      if (!l.article_title.startsWith(SPOT_MARK) || !hit(l, 2)) continue;
+      const name = spotName(l.article_title);
+      const kind = Object.keys(WELL_NAMES).find(k => WELL_NAMES[k] === name);
+      const well = kind && secrets.wells.find(w => w.kind === kind);
+      if (well) return () => openWell(well);
+      return () => openTitle(name, 'a lantern left here', { x: l.x, y: l.y });
+    }
     return null;
   }
 
@@ -1780,12 +1818,29 @@
   const pTitle = $('#panel-title'), pText = $('#panel-text'), pLink = $('#panel-link');
   const pThumb = $('#panel-thumb'), pBtn = $('#panel-lantern');
   // ↗ beside the title opens the article on Wikipedia.
-  (() => {
-    const c = pLink.querySelector('canvas').getContext('2d');
+  const LINK_ARROW = ['..#####', '.....##', '....#.#', '...#..#', '..#....', '.#.....', '#......'];
+  const LINK_ARROW_SMALL = ['.####', '...##', '..#.#', '.#..#', '#....'];
+  function drawArrow(canvas, rows = LINK_ARROW) {
+    const c = canvas.getContext('2d');
     c.fillStyle = '#b4d48c';
-    ['..#####', '.....##', '....#.#', '...#..#', '..#....', '.#.....', '#......'].forEach((row, y) =>
-      [...row].forEach((ch, x) => { if (ch === '#') c.fillRect(x, y, 1, 1); }));
-  })();
+    rows.forEach((row, y) => [...row].forEach((ch, x) => { if (ch === '#') c.fillRect(x, y, 1, 1); }));
+  }
+  drawArrow(pLink.querySelector('canvas'));
+  // A summary cut short ends in … and the same ↗, to read on.
+  function setText(text) {
+    pText.textContent = text;
+    if (!/(…|\.\.\.)$/.test(text) || pLink.hidden) return;
+    const more = document.createElement('a');
+    more.className = 'more-link';
+    more.href = pLink.href; more.target = '_blank'; more.rel = 'noopener';
+    more.setAttribute('aria-label', 'read the rest on Wikipedia');
+    more.title = 'read the rest on Wikipedia';
+    const cv = document.createElement('canvas');
+    cv.width = 5; cv.height = 5; cv.setAttribute('aria-hidden', 'true');
+    drawArrow(cv, LINK_ARROW_SMALL);
+    more.append(cv);
+    pText.append(more);
+  }
   const summaries = new Map();
   let openIdx = -1;
 
@@ -1821,8 +1876,8 @@
 
     const show = s => {
       if (openIdx !== i) return;
-      pText.textContent = s.extract || 'No summary yet. The full article is a step away.';
       if (s.url) pLink.href = s.url;
+      setText(s.extract || 'No summary yet. The full article is a step away.');
       if (s.thumb) drawThumb(s.thumb, token);
       if (opts.clicked && isAnimal(s.description)) playSample(a[0]);
     };
@@ -1856,25 +1911,33 @@
     if (spot) updateLanternButton();
     pTitle.textContent = title;
     offerTune(tuneTitle, token);
-    pText.textContent = text || '';
     pLink.hidden = !url;
     if (url) pLink.href = url;
+    setText(text || '');
     pThumb.hidden = true;
     if (thumb) drawThumb(thumb, token);
     panel.hidden = false;
   }
 
   // Thumbnails are redrawn small and scaled up so they match the pixel world.
+  // PNGs (diagrams, logos, drawings, often transparent) sit on a pale card
+  // with a margin, rather than edge to edge on the dark panel.
+  const THUMB_PAPER = css(hex('#e4e8d2'));
   function drawThumb(src, token) {
     const img = new Image();
     img.onload = () => {
       if (token !== cardToken) return;
       const w = 72;
-      const h = Math.max(1, Math.min(72, Math.round((img.naturalHeight / img.naturalWidth) * w)));
-      pThumb.width = w; pThumb.height = h;
+      const paper = /\.(png|svg|gif)(\?|$)/i.test(src);
+      const pad = paper ? 6 : 0;
+      const iw = w - pad * 2;
+      const ih = Math.max(1, Math.min(72 - pad * 2, Math.round((img.naturalHeight / img.naturalWidth) * iw)));
+      const fitW = Math.round(Math.min(iw, (ih * img.naturalWidth) / img.naturalHeight));
+      pThumb.width = w; pThumb.height = ih + pad * 2;
       const c = pThumb.getContext('2d');
+      if (paper) { c.fillStyle = THUMB_PAPER; c.fillRect(0, 0, w, pThumb.height); }
       c.imageSmoothingEnabled = true;
-      c.drawImage(img, 0, 0, w, h);
+      c.drawImage(img, Math.round((w - fitW) / 2), pad, fitW, ih);
       pThumb.hidden = false;
     };
     img.src = src;
@@ -2064,30 +2127,24 @@
     statPlanted.textContent = fmt(plantedCount);
   }
 
-  // Pointer, bottom-left: the lantern icon, with a small triangle beside it
-  // showing which way the nearest lantern is (8 directions).
+  // Pointer, bottom-left: the lantern icon, with a bright mark on the box's
+  // rim showing which way the nearest lantern is (8 directions): a bar along
+  // a side for north, east, south and west, a corner bracket for the diagonals.
   const pointerBox = $('#pointer');
   const pointerCtx = pointerBox.querySelector('canvas').getContext('2d');
-  // Drawn at one canvas pixel per screen pixel: the lantern is doubled to
-  // match the card's, and the triangle gets enough pixels to look like one.
-  const PN = 30;
-  // Eight hand-drawn triangles (drawing one at any angle on this small grid
-  // always looks broken): straight ones for the four sides, corner ones for
-  // the diagonals. Each sits just outside the lantern.
-  const TRI_SIDE = ['#...', '##..', '###.', '####', '###.', '##..', '#...'];   // points right
-  const TRI_CORNER = ['#####', '.####', '..###', '...##', '....#'];            // points up-right
-  const flipX = rows => rows.map(r => [...r].reverse().join(''));
-  const flipY = rows => rows.slice().reverse();
-  const turn = rows => rows[0].split('').map((_, x) => rows.map(r => r[x]).join('')); // transpose
-  const TRIANGLES = [
-    [TRI_SIDE, 25, 11],                  // 0 east
-    [flipY(TRI_CORNER), 23, 24],         // 1 south-east
-    [turn(TRI_SIDE), 11, 25],            // 2 south
-    [flipX(flipY(TRI_CORNER)), 2, 24],   // 3 south-west
-    [flipX(TRI_SIDE), 1, 11],            // 4 west
-    [flipX(TRI_CORNER), 2, 1],           // 5 north-west
-    [flipY(turn(TRI_SIDE)), 11, 1],      // 6 north
-    [TRI_CORNER, 23, 1],                 // 7 north-east
+  // Drawn at one canvas pixel per screen pixel; the lantern is doubled to
+  // match the card's. Its glass spans x 10-19 and its body y 11-20, so the
+  // side bars are as long as the lantern is wide (or its body tall).
+  const PN = 30, RIM = 2, ARM = 6;
+  const RIM_MARKS = [
+    [[PN - RIM, 11, RIM, 10]],                                   // 0 east
+    [[PN - ARM, PN - RIM, ARM, RIM], [PN - RIM, PN - ARM, RIM, ARM]], // 1 south-east
+    [[10, PN - RIM, 10, RIM]],                                   // 2 south
+    [[0, PN - RIM, ARM, RIM], [0, PN - ARM, RIM, ARM]],          // 3 south-west
+    [[0, 11, RIM, 10]],                                          // 4 west
+    [[0, 0, ARM, RIM], [0, 0, RIM, ARM]],                        // 5 north-west
+    [[10, 0, 10, RIM]],                                          // 6 north
+    [[PN - ARM, 0, ARM, RIM], [PN - RIM, 0, RIM, ARM]],          // 7 north-east
   ];
   let pointerKey = '';
   function updateCompass() {
@@ -2117,10 +2174,9 @@
     }));
     pointerCtx.fillStyle = '#fff6c0';
     pointerCtx.fillRect(14, 15, 2, 2);
-    // The triangle at the rim, in the lantern's direction.
-    const [rows, ox, oy] = TRIANGLES[step];
+    // The mark on the rim, in the lantern's direction.
     pointerCtx.fillStyle = '#f5d142';
-    rows.forEach((row, y) => [...row].forEach((ch, x) => { if (ch === '#') pointerCtx.fillRect(ox + x, oy + y, 1, 1); }));
+    for (const [x, y, w, h] of RIM_MARKS[step]) pointerCtx.fillRect(x, y, w, h);
   }
 
   const clockTime = $('#clock-time');
@@ -2468,6 +2524,8 @@
     const saved = store.get('wikipark.pos', null);
     if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) {
       centerOn(saved.x, saved.y);
+    } else if (secrets.library) {
+      centerOn(secrets.library.x, secrets.library.y + 6); // first visit: just below the library
     } else {
       const a = world.articles[Math.floor(Math.random() * world.articles.length)];
       centerOn(a[2] + (Math.random() - 0.5) * 30, a[3] + (Math.random() - 0.5) * 30);

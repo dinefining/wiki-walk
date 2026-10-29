@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Wiki Park world builder.
+// Parque Biblioteca world builder.
 // Run once with Node 18+:  node prepare.js
 // Collects Wikipedia articles from three seed sets (Nature, Technology,
 // Human individuality), finds articles that bridge them, lays everything out
@@ -96,7 +96,7 @@ const BRIDGE_SEARCHES = [
   ['computer music generative', T | H],
 ];
 
-const SKIP_TITLE = /^(List|Lists|Index|Outline|Glossary|Timeline|Bibliography) of|\(disambiguation\)|:/i;
+const SKIP_TITLE = /^(List|Lists|Index|Outline|Glossary|Timeline|Bibliography|Comparison|Table) of|\bchronology\b|\(disambiguation\)|:/i;
 const SKIP_CAT = /by (country|continent|year|decade|century|region|state|city|location|nationality)|lists|people|stubs|templates|organi[sz]ations|companies|images|wikipedia|works|books|films|journals|museums|awards|events|conferences|websites|software by|fictional|in (fiction|popular culture)/i;
 
 const PER_SET_CAP = 6000;   // candidates per set, before the quality rules
@@ -333,6 +333,35 @@ async function fetchViews(titles) {
   return views;
 }
 
+// What the card will show: the length of the article's summary (its lead
+// paragraph, as the park shows it) and whether it comes with a picture.
+// Articles that open with a table or an infobox alone have no summary.
+async function fetchSummaries(titles) {
+  const out = {};
+  for (let i = 0; i < titles.length; i++) {
+    const url = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(titles[i].replace(/ /g, '_'))}`;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        await sleep(REQUEST_GAP_MS);
+        const res = await fetch(url, { headers: { 'User-Agent': UA, 'Api-User-Agent': UA }, signal: AbortSignal.timeout(20000) });
+        if (res.status === 429) { await sleep((Number(res.headers.get('retry-after')) || 10) * 1000); continue; }
+        if (res.status === 404) { out[titles[i]] = { sx: 0, im: 0 }; break; }
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const d = await res.json();
+        out[titles[i]] = d.type === 'standard' ? { sx: (d.extract || '').length, im: d.thumbnail ? 1 : 0 } : { sx: 0, im: 0 };
+        break;
+      } catch (e) {
+        await sleep(800 * (attempt + 1));
+      }
+    }
+    if (i % 100 === 0) console.log(`  summaries ${i + 1}/${titles.length}`);
+  }
+  return out;
+}
+// A card worth opening has a picture and a summary with some context to it:
+// short leads tend to belong to minor biographies and stubby sub-topics.
+const MIN_SUMMARY = 200; // characters: two real sentences or so
+
 // ------------------------------------------------------- what may grow -----
 // Rules for an article to grow in the forest (the browser applies the same
 // ones to planting):
@@ -346,7 +375,7 @@ async function fetchViews(titles) {
 const MIN_BYTES = 4000;
 const STUB = /stubs?$|stub articles/i;
 const MANY_MEANINGS = /set index|disambiguation/i;
-const PERSON = /\b(births|deaths)$|^living people$|^people from/i;
+const PERSON = /(?<!animal )\b(births|deaths)$|^living people$|^people from/i; // not "2008 animal deaths"
 const COMPANY = /companies|^brands$/i;
 // Narrower than the colour keywords: what makes a person or company belong here.
 const THEMES = [
@@ -793,14 +822,32 @@ function assignShapes(list) {
   let list;
   if (!refresh && fs.existsSync(cacheFile)) {
     list = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
-    console.log(`Wiki Park: using ${list.length} cached articles (pass --refresh to fetch again)`);
+    console.log(`Parque Biblioteca: using ${list.length} cached articles (pass --refresh to fetch again)`);
   } else {
-    console.log('Wiki Park: collecting articles from Wikipedia…');
+    console.log('Parque Biblioteca: collecting articles from Wikipedia…');
     list = await collect();
     fs.writeFileSync(cacheFile, JSON.stringify(list));
   }
   // Search hits with a disambiguator are usually people or namesakes, not bridges.
   list = list.filter(e => !(String(e.group).startsWith('search:') && /\(/.test(e.title)));
+
+  // Articles kept by hand, one per line in keep.txt. Ones the collection never
+  // found join as candidates too, and still have to pass the rules.
+  const keptFile = path.join(__dirname, 'keep.txt');
+  const kept = new Set(fs.existsSync(keptFile)
+    ? fs.readFileSync(keptFile, 'utf8').split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'))
+    : []);
+  const known = new Set(list.map(e => e.title));
+  const extra = [...kept].filter(t => !known.has(t));
+  if (extra.length) {
+    const resolved = await resolveTitles(extra);
+    for (const t of extra) {
+      const c = resolved.get(t);
+      if (!c) { console.log(`  (no article called "${t}")`); continue; }
+      kept.add(c);
+      if (!known.has(c)) { list.push({ title: c, mask: 0, group: 'kept by hand' }); known.add(c); }
+    }
+  }
   list.sort((a, b) => (a.title < b.title ? -1 : 1));
 
   // Metadata is cached per title and only fetched for titles not seen yet.
@@ -812,10 +859,23 @@ function assignShapes(list) {
     fs.writeFileSync(metaFile, JSON.stringify(meta));
   }
 
+  // Hand-kept newcomers take their sets from their own categories.
+  for (const e of list) {
+    if (e.mask) continue;
+    const text = [e.title, ...((meta[e.title] && meta[e.title].c) || [])];
+    e.mask = [0, 1, 2].reduce((m, k) => (text.some(c => KEYWORDS[k].test(c)) ? m | (1 << k) : m), 0) || H;
+  }
+
+  // Titles taken out by hand, one per line in removed.txt; the next in line
+  // grows in their place.
+  const removedFile = path.join(__dirname, 'removed.txt');
+  const removed = new Set(fs.existsSync(removedFile)
+    ? fs.readFileSync(removedFile, 'utf8').split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'))
+    : []);
   // The rules: what doesn't qualify doesn't grow.
   const dropped = {};
   list = list.filter(e => {
-    const why = whyNot(e.title, meta[e.title]);
+    const why = removed.has(e.title) ? 'removed by hand' : whyNot(e.title, meta[e.title]);
     if (why) dropped[why] = (dropped[why] || 0) + 1;
     return !why;
   });
@@ -845,23 +905,54 @@ function assignShapes(list) {
       const text = [e.title, ...meta[e.title].c];
       return popcount(e.mask | [0, 1, 2].reduce((m, k) => (text.some(c => THEMES[k].test(c)) ? m | (1 << k) : m), 0));
     };
-    const score = e => 1.5 * reach(e) + 0.5 * Math.log10(meta[e.title].pv + 10) + 0.6 * Math.log10(e.length || 1);
+    // Broad, encyclopedia-front-page topics (Tree, Art, Computer) are what you
+    // could look up anyway; the park wants the specific, surprising ones. A
+    // topic broad enough to have a category of its own name, or a one-word
+    // title, ranks lower.
+    const base = t => t.replace(/ \(.*\)$/, '').toLowerCase();
+    const broad = e => {
+      const b = base(e.title);
+      return meta[e.title].c.some(c => { const cb = c.toLowerCase(); return cb === b || cb === b + 's' || cb === b + 'es'; });
+    };
+    const oneWord = e => !/\s/.test(base(e.title));
+    const score = e => 1.5 * reach(e) + 0.3 * Math.log10(meta[e.title].pv + 10) + 0.6 * Math.log10(e.length || 1) -
+      (broad(e) ? 1.5 : 0) - (oneWord(e) ? 0.6 : 0);
     const offTheme = e => meta[e.title].c.some(c => OFF_THEME.test(c));
     const lead = e => (e.mix.filter(Boolean).length > 1 ? 3 : e.mix.indexOf(4));
-    const chosen = new Set(list.filter(e => e.group === 'bridge'));
-    const perGroup = {};
-    const queues = [0, 1, 2, 3].map(k => list.filter(e => lead(e) === k && !chosen.has(e) && !offTheme(e)).sort((a, b) => score(b) - score(a)));
-    const GROUP_CAP = 6;
-    for (let k = 0; chosen.size < FOREST_SIZE && queues.some(q => q.length); k = (k + 1) % 4) {
-      const q = queues[k];
-      while (q.length) {
-        const e = q.shift();
-        if ((perGroup[e.group] || 0) >= GROUP_CAP) continue;
-        perGroup[e.group] = (perGroup[e.group] || 0) + 1;
-        chosen.add(e);
-        break;
+    const thin = e => meta[e.title].im !== undefined && (meta[e.title].sx < MIN_SUMMARY || !meta[e.title].im);
+    const GROUP_CAP = 5;
+    let chosen, perGroup;
+    const pick = () => {
+      chosen = new Set(list.filter(e => (e.group === 'bridge' || kept.has(e.title)) && !thin(e)));
+      perGroup = {};
+      // Beyond the hand-kept ones, articles that reach a second theme come
+      // first; only when those run out do single-theme ones fill the gaps.
+      for (const minReach of [2, 1]) {
+        const queues = [0, 1, 2, 3].map(k => list.filter(e => lead(e) === k && !chosen.has(e) && !offTheme(e) && !thin(e) && reach(e) >= minReach).sort((a, b) => score(b) - score(a)));
+        for (let k = 0; chosen.size < FOREST_SIZE && queues.some(q => q.length); k = (k + 1) % 4) {
+          const q = queues[k];
+          while (q.length) {
+            const e = q.shift();
+            if ((perGroup[e.group] || 0) >= GROUP_CAP) continue;
+            perGroup[e.group] = (perGroup[e.group] || 0) + 1;
+            chosen.add(e);
+            break;
+          }
+        }
       }
+    };
+    // Pick, then read the summaries of what was picked; anything with too
+    // little to say makes way for the next in line.
+    for (let round = 0; round < 12; round++) {
+      pick();
+      const unread = [...chosen].map(e => e.title).filter(t => meta[t].im === undefined);
+      if (!unread.length) break;
+      console.log(`Reading summaries for ${unread.length} articles…`);
+      Object.entries(await fetchSummaries(unread)).forEach(([t, v]) => Object.assign(meta[t], v));
+      fs.writeFileSync(metaFile, JSON.stringify(meta));
     }
+    const thinCount = Object.values(meta).filter(m => m.im !== undefined && (m.sx < MIN_SUMMARY || !m.im)).length;
+    console.log(`  ${thinCount} articles left out for a short summary or no picture`);
     list = [...chosen].sort((a, b) => (a.title < b.title ? -1 : 1));
     const leads = [0, 1, 2, 3].map(k => list.filter(e => lead(e) === k).length);
     console.log(`  chose ${list.length}: ${leads[0]} nature, ${leads[1]} technology, ${leads[2]} human, ${leads[3]} mixed, from ${Object.keys(perGroup).length} categories`);
