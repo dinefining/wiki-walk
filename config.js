@@ -1,4 +1,4 @@
-// Parque Biblioteca configuration.
+// Wiki Walk configuration.
 // Leave these empty to walk in solo mode (lanterns are kept in this browser only).
 // Fill them in with your Supabase project's URL and anon (public) key to walk together.
 window.WIKIPARK_CONFIG = {

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Parque Biblioteca world builder.
+// Wiki Walk world builder.
 // Run once with Node 18+:  node prepare.js
 // Collects Wikipedia articles from three seed sets (Nature, Technology,
 // Human individuality), finds articles that bridge them, lays everything out
@@ -14,7 +14,7 @@ const API = 'https://en.wikipedia.org/w/api.php';
 // Wikimedia requires a User-Agent with contact info (a URL or email) or it rate-limits hard.
 // Set WIKIPARK_CONTACT to your repo URL or email, e.g. WIKIPARK_CONTACT=https://github.com/you/wiki-park
 const CONTACT = process.env.WIKIPARK_CONTACT || 'https://maybemachines.com';
-const UA = `WikiPark/1.0 (${CONTACT}) world-builder node/${process.versions.node}`;
+const UA = `WikiWalk/1.0 (${CONTACT}) world-builder node/${process.versions.node}`;
 const REQUEST_GAP_MS = 250; // stay well under Wikimedia's rate limits
 
 const N = 1, T = 2, H = 4; // set bits
@@ -456,6 +456,11 @@ const SPRITE_PX = SPRITES.map(rows => {
 const F_NONE = 0, F_VEG = 1, F_VEG_DEEP = 2, F_WATER = 3, F_WATER_LIGHT = 4, F_SAND = 5, F_PATH = 6, F_BRIDGE = 7, F_PATH_FADE = 8;
 const BANDS = 6;
 const isWet = f => f === F_WATER || f === F_WATER_LIGHT;
+// The library stands in a small clearing at the very middle of the park,
+// where every first walk begins.
+const LIBRARY = [W / 2, HGT / 2];
+const CLEARING = 18; // px around the library kept free of plants and thicket
+const inClearing = (x, y) => Math.hypot(x - LIBRARY[0], y - LIBRARY[1]) < CLEARING;
 const fromSketch = p => p.map(([x, y]) => [x * GW / SKETCH, y * GH / SKETCH]);
 
 function makeNoise(seed) {
@@ -635,6 +640,9 @@ function makeLayout(list, terrain) {
   };
   // Pixels taken by a plant or the one-pixel gap around it.
   const taken = new Uint8Array(W * HGT);
+  for (let y = LIBRARY[1] - CLEARING; y <= LIBRARY[1] + CLEARING; y++) {
+    for (let x = LIBRARY[0] - CLEARING; x <= LIBRARY[0] + CLEARING; x++) if (inClearing(x, y)) taken[y * W + x] = 1;
+  }
   const besideTrail = new Uint8Array(GW * GH);
   const fits = (cx, cy, size) => {
     for (const [dx, dy] of SPRITE_PX[size]) {
@@ -777,7 +785,7 @@ function addVegetation(terrain, articles, groves) {
   let count = 0;
   for (let y = 0; y < GH; y++) for (let x = 0; x < GW; x++) {
     const i = y * GW + x;
-    if (feat[i] !== F_NONE || near[i]) continue;
+    if (feat[i] !== F_NONE || near[i] || inClearing(x * BLOCK + 2, y * BLOCK + 2)) continue;
     const px = x * BLOCK + 2, py = y * BLOCK + 2;
     let bonus = 0;
     const kx = Math.floor(x / CELLB), ky = Math.floor(y / CELLB);
@@ -822,9 +830,9 @@ function assignShapes(list) {
   let list;
   if (!refresh && fs.existsSync(cacheFile)) {
     list = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
-    console.log(`Parque Biblioteca: using ${list.length} cached articles (pass --refresh to fetch again)`);
+    console.log(`Wiki Walk: using ${list.length} cached articles (pass --refresh to fetch again)`);
   } else {
-    console.log('Parque Biblioteca: collecting articles from Wikipedia…');
+    console.log('Wiki Walk: collecting articles from Wikipedia…');
     list = await collect();
     fs.writeFileSync(cacheFile, JSON.stringify(list));
   }
@@ -984,6 +992,7 @@ function assignShapes(list) {
     terrainAlphabet: ALPHABET, // features: 0 ground, 1-2 thicket, 3-4 water, 5 sand, 6 path, 8 path fading out
     sprites: SPRITES,
     diamondBytes, // article length (bytes) from which a single-theme article is a diamond
+    library: LIBRARY, // where the library stands, in its clearing
     articles, // [title, mask, centreX, centreY, n, t, h, size]
   };
   const out = path.join(__dirname, 'world.json');

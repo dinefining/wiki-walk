@@ -1,9 +1,9 @@
-// Parque Biblioteca: a pixel forest of Wikipedia articles, walked through together.
+// Wiki Walk: a pixel forest of Wikipedia articles, walked through together.
 (() => {
   'use strict';
 
   // Bump with index.html's ?v= tags when you publish changes, so browsers fetch fresh files.
-  const VERSION = '2026-10-29e';
+  const VERSION = '2026-10-29f';
   const CFG = window.WIKIPARK_CONFIG || {};
   const $ = s => document.querySelector(s);
   const canvas = $('#world');
@@ -534,7 +534,7 @@
         .insert({ ...row, secret_hash: await sha256hex(secret) })
         .select('id, article_title, x, y, created_at').single();
       if (error) {
-        console.warn('Parque Biblioteca: lantern not saved', error);
+        console.warn('Wiki Walk: lantern not saved', error);
         const id = `local-${Date.now()}`;
         mine.set(id, 'local');
         addLantern({ ...row, id, created_at: created });
@@ -785,7 +785,7 @@
 
       // Plantings first, so lanterns on planted articles find their square.
       const planted = await sb.from('plantings').select('*').order('created_at').limit(20000);
-      if (planted.error) console.warn('Parque Biblioteca: no plantings table yet', planted.error);
+      if (planted.error) console.warn('Wiki Walk: no plantings table yet', planted.error);
       else planted.data.forEach(addPlanting);
       sb.channel('wikipark-plantings')
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'plantings' }, p => addPlanting(p.new))
@@ -815,7 +815,7 @@
         });
       net.channel = ch;
     } catch (e) {
-      console.warn('Parque Biblioteca: could not reach Supabase, walking solo.', e);
+      console.warn('Wiki Walk: could not reach Supabase, walking solo.', e);
       net.client = null; net.channel = null;
       loadLocalPlantings();
       loadLocalLanterns();
@@ -1126,9 +1126,9 @@
   // after Wikipedia began: one of its oldest articles.
   const ANCIENT = { title: 'Atlas Shrugged', since: '28 January 2001' };
 
-  // The library the park is named after, drawn like Medellín's Parque
-  // Biblioteca España: dark rock-like buildings on a hillside. It opens the
-  // article on library parks. New visitors start beside it.
+  // A library at the middle of the park, drawn like Medellín's Parque
+  // Biblioteca España (dark rock-like buildings on a hillside), where every
+  // first walk begins. It opens the article on library parks.
   const LIBRARY = { title: 'Library park (Colombia)' };
   const LIBRARY_PX = [
     '...ab..',
@@ -1212,7 +1212,12 @@
 
   function placeSecrets() {
     const rng = seeded(2001);
-    // The library: the open spot nearest the middle of the park.
+    // The library: in its clearing at the middle of the park (older worlds
+    // without one get the open spot nearest the middle).
+    if (world.library) {
+      secrets.library = { x: world.library[0], y: world.library[1] };
+      claim(secrets.library.x, secrets.library.y, 7);
+    }
     for (let d = 0; d < world.w / 2 && !secrets.library; d += 4) {
       for (let k = 0; k < 24 && !secrets.library; k++) {
         const a = (k / 24) * Math.PI * 2;
@@ -2525,7 +2530,7 @@
     if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) {
       centerOn(saved.x, saved.y);
     } else if (secrets.library) {
-      centerOn(secrets.library.x, secrets.library.y + 6); // first visit: just below the library
+      centerOn(secrets.library.x, secrets.library.y); // first visit: at the library
     } else {
       const a = world.articles[Math.floor(Math.random() * world.articles.length)];
       centerOn(a[2] + (Math.random() - 0.5) * 30, a[3] + (Math.random() - 0.5) * 30);

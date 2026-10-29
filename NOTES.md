@@ -1,4 +1,4 @@
-# Parque Biblioteca: maintainer notes
+# Wiki Walk: maintainer notes
 
 A pixel forest of Wikipedia articles at the intersection of nature, technology and human individuality, walked through together.
 
@@ -80,10 +80,10 @@ Two free services: **Supabase** lets walkers see each other and share lanterns a
 
 **2. GitHub Pages (the website)**
 
-1. Sign up at [github.com](https://github.com), click **+ → New repository**, name it (e.g. `wiki-park`), make it **Public**, and create it.
+1. Sign up at [github.com](https://github.com), click **+ → New repository**, name it (e.g. `wiki-walk`), make it **Public**, and create it.
 2. On the new repository's page click **uploading an existing file** and drag in the seven files: `index.html`, `style.css`, `main.js`, `config.js` (with your keys), `world.json`, `prepare.js`, `README.md`. Click **Commit changes**.
 3. Go to **Settings → Pages**. Under *Build and deployment* choose **Deploy from a branch**, branch **main**, folder **/ (root)**, and **Save**.
-4. After a minute or two the page shows your address, like `https://your-name.github.io/wiki-park/`. That's the park.
+4. After a minute or two the page shows your address, like `https://your-name.github.io/wiki-walk/`. That's the park.
 
 **3. Check it**
 
@@ -105,7 +105,7 @@ In **Settings → Pages → Custom domain**, enter e.g. `park.maybemachines.com`
 
 ## Walking together (Supabase details)
 
-Without configuration Parque Biblioteca runs in **solo mode**: you walk alone and your lanterns stay in your browser.
+Without configuration Wiki Walk runs in **solo mode**: you walk alone and your lanterns stay in your browser.
 
 To share cursors and lanterns:
 
@@ -247,7 +247,7 @@ Not mentioned in the forest itself; they're there to be found. The fixed ones ar
 `world.json` is already included. To regenerate it (Node 18+):
 
 ```bash
-WIKIPARK_CONTACT=https://github.com/you/wiki-park node prepare.js
+WIKIPARK_CONTACT=https://github.com/you/wiki-walk node prepare.js
 ```
 
 Wikimedia rate-limits clients that don't identify themselves, so set `WIKIPARK_CONTACT` to your repository URL or an email address. The script makes about 2,000 requests one at a time, so a full fetch takes 25–35 minutes. Add `--fetch-only` to stop after fetching.
