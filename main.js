@@ -3,7 +3,7 @@
   'use strict';
 
   // Bump with index.html's ?v= tags when you publish changes, so browsers fetch fresh files.
-  const VERSION = '2026-11-01d';
+  const VERSION = '2026-11-11j';
   const CFG = window.WIKIPARK_CONFIG || {};
   const $ = s => document.querySelector(s);
   const canvas = $('#world');
@@ -74,7 +74,6 @@
   // Lantern tiers, fresh to nearly faded (30 days).
   const LANTERN = ['#f5d142', '#d4b436', '#a88c28', '#7c681c'].map(hex);
   const LANTERN_CSS = LANTERN.map(css);
-  const LANTERN_NIGHT_HALO = [hex('#5c4c14'), hex('#40340c'), hex('#2c2408'), hex('#201a04')];
   const WARM = new Set(LANTERN.map(u32));
   // Pale walker tints: cursors, and the tiny dot on squares a walker planted.
   const TINTS = ['#dcecff', '#e8dcff', '#d4fff0', '#f0f0f0', '#ffdcf4', '#dcfffa', '#ece4ff', '#e0ffe0'].map(hex).map(css);
@@ -102,8 +101,16 @@
   // At night, what a light reaches looks lamp-lit, not like daylight: warm, and
   // dimmer in stepped tones away from the light (dithered between steps).
   // In the meadow look the lamp shows colours almost as by day, cooling toward the edge.
-  const LAMP_FACTOR = MEADOW ? [1.06, 1, 0.88, 0.64] : [0.86, 0.64, 0.45, 0.29];
-  const LAMP_TINT = MEADOW ? [[0, 0, 0], [-2, 0, 4], [-4, 0, 8], [-4, 0, 10]] : [[12, 4, -6], [10, 3, -5], [7, 1, -3], [4, 0, -1]];
+  const LAMP_KEYS = MEADOW ? [1.06, 0.9, 0.7, 0.46] : [0.86, 0.64, 0.45, 0.29];
+  const LAMP_KEY_TINTS = MEADOW ? [[0, 0, 0], [-2, 0, 4], [-4, 0, 8], [-4, 0, 10]] : [[12, 4, -6], [10, 3, -5], [7, 1, -3], [4, 0, -1]];
+  // Eight fine steps between those four, so a light's rings fade into each other.
+  const LAMP_STEPS = 8;
+  const lampKey = (keys, t) => {
+    const k = Math.min(keys.length - 2, Math.floor(t * (keys.length - 1))), f = t * (keys.length - 1) - k;
+    return Array.isArray(keys[k]) ? keys[k].map((v, c) => v + (keys[k + 1][c] - v) * f) : keys[k] + (keys[k + 1] - keys[k]) * f;
+  };
+  const LAMP_FACTOR = Array.from({ length: LAMP_STEPS }, (_, s) => lampKey(LAMP_KEYS, s / (LAMP_STEPS - 1)));
+  const LAMP_TINT = Array.from({ length: LAMP_STEPS }, (_, s) => lampKey(LAMP_KEY_TINTS, s / (LAMP_STEPS - 1)));
   const lampMaps = LAMP_FACTOR.map(() => new Map());
   function lamp(p, tone) {
     const m = lampMaps[tone];
@@ -133,9 +140,28 @@
     return out;
   }
 
+  // At night only a lantern's outer rings glow amber, softly, out to the very
+  // edge, like a halo; older lanterns glow a little less.
+  const GLOW = hex('#ffbe46');
+  const GLOW_MIX = [0, 0, 0.14, 0.28, 0.46]; // the last: the outermost ring, brightest
+  const glowMaps = new Map();
+  function glow(p, tier, band) {
+    const key = tier * 5 + band;
+    let m = glowMaps.get(key);
+    if (!m) glowMaps.set(key, m = new Map());
+    let out = m.get(p);
+    if (out === undefined) {
+      const k = GLOW_MIX[band] * (1 - tier * 0.12), c = rgbOf(p);
+      out = u32(c.map((v, i) => Math.round(v + (GLOW[i] - v) * k)));
+      m.set(p, out);
+    }
+    return out;
+  }
+
   // At night everything outside a light is one flat, almost-black green.
   const NIGHT = [0, 20, 4];
   const NIGHT_U32 = u32(NIGHT);
+
 
   const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5].map(v => (v + 0.5) / 16);
 
@@ -253,7 +279,7 @@
     // Grain: every pixel a shade lighter or darker, like speckled felt.
     if (MEADOW) {
       for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-        const i = y * w + x, j = Math.floor(hash3(x, y, 31) * 5 - 2) * 6;
+        const i = y * w + x, j = Math.floor(hash3(x, y, 31) * 5 - 2) * 4;
         if (!j) continue;
         const [r, gg, bb] = rgbOf(px[i]);
         px[i] = shade([r + j, gg + j, bb + j]);
@@ -381,7 +407,7 @@
   const cam = { x: 0, y: 0 };
   const target = { x: 0, y: 0 };
   const pointer = { x: null, y: null, inside: false, touch: false }; // screen px
-  let frame = null, lightBuf = null, warmBuf = null, toneBuf = null, haloBuf = null;
+  let frame = null, lightBuf = null, warmBuf = null, toneBuf = null, warmToneBuf = null, haloBuf = null;
 
   function resize() {
     // About 75 world pixels across the short side of the screen: a walker's view, not a map.
@@ -395,6 +421,7 @@
     resizePeople();
     warmBuf = new Int8Array(vw * vh);
     toneBuf = new Float32Array(vw * vh);
+    warmToneBuf = new Float32Array(vw * vh);
     haloBuf = new Int8Array(vw * vh);
     ctx.imageSmoothingEnabled = false;
     clampTarget();
@@ -992,34 +1019,44 @@
         lightBuf.fill(0);
         warmBuf.fill(-1);
         toneBuf.fill(1);
+        warmToneBuf.fill(2); // above any tone, so a lantern claims even its edge
         const me = myWorldPos();
-        addLight(me.x - ix, me.y - iy, 13, -1);
+        // Every light breathes a little, so its rings drift at the edges;
+        // lanterns more, like a flame.
+        const breathe = (period, amp, seed = 0) => Math.sin(ft / period + seed) * amp;
+        addLight(me.x - ix, me.y - iy, 13 + breathe(900, 0.5), -1);
         // Other walkers' lights sit around their arrow's middle, not its tip.
         const ax = (2.5 * PEOPLE_SCALE) / scale, ay = (4 * PEOPLE_SCALE) / scale;
-        for (const o of others.values()) addLight(o.x + ax - ix, o.y + ay - iy, 5, -1);
+        for (const o of others.values()) addLight(o.x + ax - ix, o.y + ay - iy, 5 + breathe(800, 0.3, o.x), -1);
         // The library keeps a soft, cool light on all night.
-        if (secrets.library) addLight(secrets.library.x + 0.5 - ix, secrets.library.y + 0.5 - iy, 10, -1);
+        if (secrets.library) addLight(secrets.library.x + 0.5 - ix, secrets.library.y + 0.5 - iy, 10 + breathe(1100, 0.4), -1);
         for (const g of visibleLanterns) {
-          addLight(g.x + 0.5 - ix, g.y + 0.5 - iy, g.r + 1 + Math.sin(ft / 480 + g.x * 0.7) * 0.7, g.tier);
+          addLight(g.x + 0.5 - ix, g.y + 0.5 - iy, g.r - 1.5 + breathe(480, 0.8, g.x * 0.7), g.tier);
         }
         for (const f of fireflies) if (f.on) addGlow(Math.round(f.x) - ix, Math.round(f.y) - iy);
-        // The warm halo's dither moves, so lanterns flicker; everything else stays put.
-        const wob = Math.floor(ft / 160) & 3;
+        // Where two rings meet, a one-pixel checker blends them. A lantern's
+        // checker swaps a few times a second, so its rings shimmer.
+        const wob = Math.floor(ft / 160) & 1;
         for (let y = 0; y < vh; y++) {
           const by = ((y + iy) & 3) * 4;
-          const wy = ((y + iy + wob) & 3) * 4;
           for (let x = 0; x < vw; x++) {
             const i = y * vw + x;
             const p = px[i];
             if (WARM.has(p)) continue;
             const L = lightBuf[i];
-            const thr = warmBuf[i] >= 0 ? BAYER[wy + ((x + ix + wob * 3) & 3)] : BAYER[by + ((x + ix) & 3)];
-            if (L > 0 && L > thr) {
-              if (L < 1 && warmBuf[i] >= 0) px[i] = u32(LANTERN_NIGHT_HALO[warmBuf[i]]);
-              else {
-                const tone = Math.floor(toneBuf[i] * 3.4 + (BAYER[by + ((x + ix) & 3)] - 0.5) * 0.9);
-                px[i] = lamp(p, tone < 0 ? 0 : tone > 3 ? 3 : tone);
+            if (L > 0 && L > BAYER[by + ((x + ix) & 3)]) {
+              const odd = (x + ix + y + iy) & 1;
+              let tone = Math.floor(toneBuf[i] * (LAMP_STEPS - 0.4) + (odd ? 0.3 : -0.3));
+              tone = tone < 0 ? 0 : tone >= LAMP_STEPS ? LAMP_STEPS - 1 : tone;
+              let c = lamp(p, tone);
+              // Lanterns: amber rings over the top, glowing most at the edge.
+              const warm = warmBuf[i];
+              if (warm >= 0) {
+                const wt = warmToneBuf[i];
+                const band = wt >= 1 ? 4 : Math.floor(wt * 4 + (odd ^ wob ? 0.2 : -0.2));
+                if (band >= 2) c = glow(c, warm, band);
               }
+              px[i] = c;
             } else {
               px[i] = NIGHT_U32;
             }
@@ -1235,29 +1272,21 @@
     const outer = r + 3.5;
     const x0 = Math.max(0, Math.floor(cx - outer)), x1 = Math.min(vw - 1, Math.ceil(cx + outer));
     const y0 = Math.max(0, Math.floor(cy - outer)), y1 = Math.min(vh - 1, Math.ceil(cy + outer));
-    const b1 = (r + 1.2) ** 2, b2 = (r + 2.3) ** 2, b3 = outer ** 2, r2 = r * r;
+    const b3 = outer ** 2;
+    // A light is a solid round pixel circle that dims in concentric rings
+    // (the pixel pass steps the tone); where lights overlap, the brightest
+    // tone wins. A lantern's warmth is kept apart and laid over the top, so
+    // it still glows inside someone's lamp.
     for (let y = y0; y <= y1; y++) {
       for (let x = x0; x <= x1; x++) {
         const dx = x + 0.5 - cx, dy = y + 0.5 - cy;
         const d2 = dx * dx + dy * dy;
-        let v = d2 <= r2 ? 1 : d2 <= b1 ? 0.6 : d2 <= b2 ? 0.32 : d2 <= b3 ? 0.12 : 0;
-        if (!v) continue;
-        // Lamps (not lanterns, whose dither flickers) end in a clean round
-        // edge: solid out to the first band, then one checkerboard ring
-        // counted from their centre pixel, so it's even on every side.
-        if (tier < 0 && v < 1) {
-          if (v < 0.32) continue;
-          const ox = x - Math.floor(cx), oy = y - Math.floor(cy);
-          if (v < 0.6 && (ox + oy) & 1) continue;
-          v = 0.999;
-        }
+        if (d2 > b3) continue;
         const i = y * vw + x;
+        lightBuf[i] = 1;
         const tone = Math.min(1, Math.sqrt(d2) / (r + 2.5));
         if (tone < toneBuf[i]) toneBuf[i] = tone;
-        if (v > lightBuf[i]) {
-          lightBuf[i] = v;
-          warmBuf[i] = v < 1 ? tier : -1;
-        }
+        if (tier >= 0 && tone < warmToneBuf[i]) { warmToneBuf[i] = tone; warmBuf[i] = tier; }
       }
     }
   }
