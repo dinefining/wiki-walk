@@ -3,7 +3,7 @@
   'use strict';
 
   // Bump with index.html's ?v= tags when you publish changes, so browsers fetch fresh files.
-  const VERSION = '2026-10-29f';
+  const VERSION = '2026-11-01d';
   const CFG = window.WIKIPARK_CONFIG || {};
   const $ = s => document.querySelector(s);
   const canvas = $('#world');
@@ -31,24 +31,31 @@
   const u32 = ([r, g, b]) => ((255 << 24) | (b << 16) | (g << 8) | r) >>> 0;
   const rgbOf = p => [p & 255, (p >> 8) & 255, (p >> 16) & 255];
 
+  // Meadow look: what your light reaches is painted in a bright storybook
+  // palette (lime grass, sky-blue water, saturated flowers) with a speckled
+  // grain, like felt or an old print. false brings back the earlier greens.
+  const MEADOW = true;
+
   // Ground per biome mask (bit0 nature, bit1 technology, bit2 human): barely different.
-  const GROUND = {
-    0: hex('#009400'), 1: [0, 142, 0], 2: [4, 148, 10], 4: [6, 154, 0],
-    3: [2, 145, 6], 5: [4, 149, 0], 6: [6, 152, 6], 7: [10, 158, 10],
-  };
+  const GROUND_BASE = MEADOW ? [84, 180, 46] : [0, 148, 0];
+  const GROUND = Object.fromEntries(Object.entries({
+    0: [0, 0, 0], 1: [0, -6, 0], 2: [4, 0, 10], 4: [6, 6, 0],
+    3: [2, -3, 6], 5: [4, 1, 0], 6: [6, 4, 6], 7: [10, 10, 10],
+  }).map(([m, d]) => [m, GROUND_BASE.map((v, k) => v + d[k])]));
   // Terrain: elevation terraces nudge the green channel; features are flat blocks.
   const BAND_G = [-10, -6, -2, 2, 6, 10];
-  const VEG = [0, 112, 4], VEG_DEEP = [0, 92, 4];
-  const WATER = hex('#3476a8'), WATER_LIGHT = hex('#5496c8');
-  const SAND = hex('#be9b65');
-  const PATH = hex('#a08a5e'), BRIDGE = hex('#8a6a44');
+  const VEG = MEADOW ? [40, 150, 44] : [0, 112, 4], VEG_DEEP = MEADOW ? [26, 120, 46] : [0, 92, 4];
+  const WATER = hex(MEADOW ? '#36acf0' : '#3476a8'), WATER_LIGHT = hex(MEADOW ? '#9adcfa' : '#5496c8');
+  const SAND = hex(MEADOW ? '#d8bc84' : '#be9b65');
+  const PATH = hex(MEADOW ? '#c8a26a' : '#a08a5e'), BRIDGE = hex(MEADOW ? '#a8784a' : '#8a6a44');
   // Lily pads: p/P pad, f flower.
   const SCENERY_COLOURS = { p: '#4f8f3c', P: '#6aa84e', f: '#f2d6e8' };
   const SCENERY = { lilies: [['Pp', 'p.'], ['pP', '.p'], ['Pf', 'pp'], ['pPp', 'pp.']] };
   // Articles: a mix of pine green (nature), blue spruce (technology) and
   // heather (human individuality), in quarters. Flowers are paler, like
   // blossoms; trees darker, like canopies.
-  const SET_COLOURS = [hex('#f4fc8c'), hex('#86e2fa'), hex('#eeaef4')]; // nature, technology, being human
+  const SET_COLOURS = MEADOW ? [hex('#fff27a'), hex('#b4ecff'), hex('#ffc2e6')] // nature, technology, being human
+    : [hex('#f4fc8c'), hex('#86e2fa'), hex('#eeaef4')];
   const SIZE_TONE = [0, 0, -0.08]; // cross, ring, diamond: diamonds a touch deeper
   const mixKey = a => (a[4] * 25 + a[5] * 5 + a[6]) * 3 + a[7];
   const ART_CSS = new Map(), ART_HOVER_CSS = new Map();
@@ -94,8 +101,9 @@
 
   // At night, what a light reaches looks lamp-lit, not like daylight: warm, and
   // dimmer in stepped tones away from the light (dithered between steps).
-  const LAMP_FACTOR = [0.86, 0.64, 0.45, 0.29];
-  const LAMP_TINT = [[12, 4, -6], [10, 3, -5], [7, 1, -3], [4, 0, -1]];
+  // In the meadow look the lamp shows colours almost as by day, cooling toward the edge.
+  const LAMP_FACTOR = MEADOW ? [1.06, 1, 0.88, 0.64] : [0.86, 0.64, 0.45, 0.29];
+  const LAMP_TINT = MEADOW ? [[0, 0, 0], [-2, 0, 4], [-4, 0, 8], [-4, 0, 10]] : [[12, 4, -6], [10, 3, -5], [7, 1, -3], [4, 0, -1]];
   const lampMaps = LAMP_FACTOR.map(() => new Map());
   function lamp(p, tone) {
     const m = lampMaps[tone];
@@ -242,6 +250,15 @@
       }
     }
     addScenery(px, w, h);
+    // Grain: every pixel a shade lighter or darker, like speckled felt.
+    if (MEADOW) {
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        const i = y * w + x, j = Math.floor(hash3(x, y, 31) * 5 - 2) * 6;
+        if (!j) continue;
+        const [r, gg, bb] = rgbOf(px[i]);
+        px[i] = shade([r + j, gg + j, bb + j]);
+      }
+    }
     // A ragged band of forest wall along the world's edge.
     for (let by = 0; by < world.gh; by++) for (let bx = 0; bx < gw; bx++) {
       const d = Math.min(bx, by, gw - 1 - bx, world.gh - 1 - by);
@@ -530,20 +547,23 @@
     const created = new Date().toISOString();
     if (net.client) {
       const secret = newId();
-      const { data, error } = await net.client.from('lanterns')
-        .insert({ ...row, secret_hash: await sha256hex(secret) })
-        .select('id, article_title, x, y, created_at').single();
+      const hash = await sha256hex(secret);
+      const insert = extra => net.client.from('lanterns')
+        .insert({ ...row, secret_hash: hash, ...extra }).select('*').single();
+      let { data, error } = await insert({ walker: myName });
+      // Before the walker column exists in the database, leave it unsigned.
+      if (error && /walker/.test(error.message || '')) ({ data, error } = await insert({}));
       if (error) {
         console.warn('Wiki Walk: lantern not saved', error);
         const id = `local-${Date.now()}`;
         mine.set(id, 'local');
-        addLantern({ ...row, id, created_at: created });
+        addLantern({ ...row, id, created_at: created, walker: myName });
       } else {
         mine.set(String(data.id), secret);
         addLantern(data);
       }
     } else {
-      const l = { ...row, id: `local-${Date.now()}`, created_at: created };
+      const l = { ...row, id: `local-${Date.now()}`, created_at: created, walker: myName };
       store.set('wikipark.lanterns', store.get('wikipark.lanterns', []).concat(l));
       mine.set(l.id, 'local');
       addLantern(l);
@@ -739,15 +759,62 @@
   }
   const myTint = tintIndex(visitorId);
 
+  // Every walker has a two-word park name, the same on every visit. Names
+  // travel (and are stored on lanterns) as one number, so nobody can send
+  // other text: walkerName(n) is word NAME_ADJ[n >> 6] and NAME_NOUN[n & 63].
+  const NAME_ADJ = ['quiet', 'mossy', 'dusky', 'misty', 'sleepy', 'gentle', 'roving', 'curious', 'humming', 'drifting', 'silver',
+    'amber', 'hollow', 'velvet', 'rustling', 'dappled', 'patient', 'wistful', 'tiny', 'distant', 'glowing', 'lunar', 'ferny',
+    'static', 'analog', 'paper', 'woolly', 'dewy', 'soft', 'shy', 'wild', 'early'];
+  const NAME_NOUN = ['heron', 'modem', 'beetle', 'moth', 'otter', 'fern', 'lichen', 'radio', 'compass', 'pebble', 'kettle', 'sparrow',
+    'badger', 'comet', 'owl', 'newt', 'wren', 'antenna', 'atlas', 'cable', 'signal', 'acorn', 'thimble', 'hedgehog', 'firefly',
+    'cricket', 'floppy', 'abacus', 'teapot', 'walrus', 'pinecone', 'magpie'];
+  const validName = n => Number.isInteger(n) && n >= 0 && (n >> 6) < NAME_ADJ.length && (n & 63) < NAME_NOUN.length;
+  const walkerName = n => (validName(n) ? `${NAME_ADJ[n >> 6]} ${NAME_NOUN[n & 63]}` : '');
+  const myName = (() => {
+    let h = 7;
+    for (let i = 0; i < visitorId.length; i++) h = (h * 131 + visitorId.charCodeAt(i)) >>> 0;
+    return ((h % NAME_ADJ.length) << 6) | (Math.floor(h / NAME_ADJ.length) % NAME_NOUN.length);
+  })();
+
+  $('#my-name').textContent = walkerName(myName);
+
   function receiveCursor(p) {
     if (!p || p.id === myId || typeof p.x !== 'number' || typeof p.y !== 'number') return;
     let o = others.get(p.id);
     if (!o) {
       const c = Number.isInteger(p.c) && p.c >= 0 && p.c < TINTS.length ? p.c : tintIndex(p.id);
-      o = { x: p.x, y: p.y, tx: p.x, ty: p.y, tint: TINTS[c] };
+      o = { x: p.x, y: p.y, tx: p.x, ty: p.y, tint: TINTS[c], steps: [], wave: 0 };
       others.set(p.id, o);
     }
+    if (validName(p.n)) o.name = walkerName(p.n);
     o.tx = p.x; o.ty = p.y; o.last = performance.now();
+  }
+
+  // A wave: click another walker and a small sparkle shows over them for
+  // everyone nearby; they also hear who waved.
+  let lastWave = 0;
+  function waveAt(id) {
+    const o = others.get(id), now = performance.now();
+    if (!o || !net.channel || !net.ready) return;
+    if (now - lastWave < 1500) return;
+    lastWave = now;
+    o.wave = now;
+    net.channel.send({ type: 'broadcast', event: 'wave', payload: { from: myId, to: id, n: myName } });
+    toast(o.name ? `you waved at ${o.name}` : 'you waved');
+  }
+  function receiveWave(p) {
+    if (!p || typeof p.to !== 'string') return;
+    const now = performance.now();
+    if (p.to === myId) {
+      const from = others.get(p.from);
+      if (from) from.wave = now;
+      const name = walkerName(p.n);
+      toast(name ? `${name} waved at you` : 'someone waved at you');
+      chime();
+    } else {
+      const o = others.get(p.to);
+      if (o) o.wave = now;
+    }
   }
 
   function sendCursor(now) {
@@ -757,7 +824,7 @@
     const moved = x !== net.lastX || y !== net.lastY;
     if ((moved && now - net.lastSend >= 100) || now - net.lastSend >= 2000) {
       net.lastSend = now; net.lastX = x; net.lastY = y;
-      net.channel.send({ type: 'broadcast', event: 'cursor', payload: { id: myId, x, y, c: myTint } });
+      net.channel.send({ type: 'broadcast', event: 'cursor', payload: { id: myId, x, y, c: myTint, n: myName } });
     }
   }
 
@@ -805,6 +872,7 @@
 
       const ch = sb.channel('wikipark-walk', { config: { broadcast: { self: false }, presence: { key: myId } } });
       ch.on('broadcast', { event: 'cursor' }, ({ payload }) => receiveCursor(payload))
+        .on('broadcast', { event: 'wave' }, ({ payload }) => receiveWave(payload))
         .on('presence', { event: 'leave' }, ({ key }) => others.delete(key))
         .on('presence', { event: 'sync' }, () => {
           onlineCount = Math.max(1, Object.keys(ch.presenceState()).length);
@@ -926,7 +994,9 @@
         toneBuf.fill(1);
         const me = myWorldPos();
         addLight(me.x - ix, me.y - iy, 13, -1);
-        for (const o of others.values()) addLight(o.x - ix, o.y - iy, 5, -1);
+        // Other walkers' lights sit around their arrow's middle, not its tip.
+        const ax = (2.5 * PEOPLE_SCALE) / scale, ay = (4 * PEOPLE_SCALE) / scale;
+        for (const o of others.values()) addLight(o.x + ax - ix, o.y + ay - iy, 5, -1);
         // The library keeps a soft, cool light on all night.
         if (secrets.library) addLight(secrets.library.x + 0.5 - ix, secrets.library.y + 0.5 - iy, 10, -1);
         for (const g of visibleLanterns) {
@@ -1052,6 +1122,24 @@
     });
   }
 
+  // Fine grain over everything, at the screen's own resolution: a tile of
+  // grey noise that style.css blends over the park and jitters a few times a second.
+  if (MEADOW) {
+    const tile = document.createElement('canvas');
+    tile.width = tile.height = 160;
+    const tc = tile.getContext('2d'), noise = tc.createImageData(160, 160);
+    for (let i = 0; i < noise.data.length; i += 4) {
+      const v = Math.random() * 255;
+      noise.data[i] = noise.data[i + 1] = noise.data[i + 2] = v;
+      noise.data[i + 3] = 255;
+    }
+    tc.putImageData(noise, 0, 0);
+    const grain = $('#grain');
+    grain.style.backgroundImage = `url(${tile.toDataURL()})`;
+    grain.style.backgroundSize = `${160 / Math.max(1, Math.min(2, devicePixelRatio || 1))}px`;
+    grain.hidden = false;
+  }
+
   // Other walkers stay cursor-sized whatever the world's zoom, on their own
   // overlay canvas where one pixel is always PEOPLE_SCALE screen pixels.
   const people = $('#people');
@@ -1063,19 +1151,70 @@
     people.style.width = `${people.width * PEOPLE_SCALE}px`;
     people.style.height = `${people.height * PEOPLE_SCALE}px`;
   }
+  // A 3×5 pixel alphabet for walkers' names.
+  const GLYPHS = {
+    a: '.#.#.#####.##.#', b: '##.#.###.#.###.', c: '.###..#..#...##', d: '##.#.##.##.###.', e: '####..##.#..###',
+    f: '####..##.#..#..', g: '.###..#.##.#.##', h: '#.##.#####.##.#', i: '###.#..#..#.###', j: '..#..#..##.#.#.',
+    k: '#.##.###.#.##.#', l: '#..#..#..#..###', m: '#.#####.##.##.#', n: '##.#.##.##.##.#', o: '.#.#.##.##.#.#.',
+    p: '##.#.###.#..#..', q: '.#.#.##.###..##', r: '##.#.###.#.##.#', s: '.###...#...###.', t: '###.#..#..#..#.',
+    u: '#.##.##.##.####', v: '#.##.##.##.#.#.', w: '#.##.##.#####.#', x: '#.##.#.#.#.##.#', y: '#.##.#.#..#..#.',
+    z: '###..#.#.#..###',
+  };
+  const NAME_SHADOW = css(hex('#06100a'));
+  function drawName(text, x, y, colour) {
+    for (const [fill, dx] of [[NAME_SHADOW, 1], [colour, 0]]) {
+      pctx.fillStyle = fill;
+      [...text].forEach((ch, k) => {
+        const g = GLYPHS[ch];
+        if (!g) return;
+        for (let p = 0; p < 15; p++) if (g[p] === '#') pctx.fillRect(x + k * 4 + (p % 3) + dx, y + Math.floor(p / 3) + dx, 1, 1);
+      });
+    }
+  }
+  // A four-point sparkle over a walker someone waved at.
+  const SPARKLE = ['..#..', '..#..', '##.##', '..#..', '..#..'];
+  const WAVE_MS = 1600, STEP_MS = 5000;
+  // Names show for walkers close enough that your lights meet.
+  const NAME_NEAR = 26;
   function drawPeople() {
     pctx.clearRect(0, 0, people.width, people.height);
+    const now = performance.now(), me = myWorldPos();
+    const toScreen = (x, y) => [Math.round(((x - cam.x) * scale) / PEOPLE_SCALE), Math.round(((y - cam.y) * scale) / PEOPLE_SCALE)];
     for (const o of others.values()) {
+      // Footprints: where they just walked, fading over a few seconds.
+      for (const s of o.steps) {
+        const age = (now - s.t) / STEP_MS;
+        if (age >= 1 || (level !== 4 && !canSeeAt(s.x, s.y))) continue;
+        const [sx, sy] = toScreen(s.x, s.y);
+        pctx.globalAlpha = 0.8 * (1 - age);
+        pctx.fillStyle = o.tint;
+        pctx.fillRect(sx + s.side, sy, 1, 2);
+      }
+      pctx.globalAlpha = 1;
       // By day you see other walkers only inside your circle of view; at night they carry lights.
       if (level !== 4 && !canSeeAt(o.x, o.y)) continue;
-      const cx = Math.round(((o.x - cam.x) * scale) / PEOPLE_SCALE);
-      const cy = Math.round(((o.y - cam.y) * scale) / PEOPLE_SCALE);
+      const [cx, cy] = toScreen(o.x, o.y);
       if (cx < -6 || cy < -8 || cx > people.width || cy > people.height) continue;
       pctx.fillStyle = o.tint;
       for (let r = 0; r < ARROW.length; r++) {
         for (let c = 0; c < ARROW[r].length; c++) if (ARROW[r][c] === '1') pctx.fillRect(cx + c, cy + r, 1, 1);
       }
+      if (o.name && Math.hypot(o.x - me.x, o.y - me.y) <= NAME_NEAR) drawName(o.name, cx + 4, cy + 9, o.tint);
+      const w = (now - o.wave) / WAVE_MS;
+      if (w >= 0 && w < 1 && Math.floor(w * 8) % 2 === 0) {
+        pctx.fillStyle = '#f5d142';
+        SPARKLE.forEach((row, r) => [...row].forEach((ch, c) => { if (ch === '#') pctx.fillRect(cx + c - 1, cy + r - 7 - Math.round(w * 3), 1, 1); }));
+      }
     }
+  }
+  // Where a walker is in reach of a click (screen pixels), for waving.
+  function walkerAt(sx, sy) {
+    for (const [id, o] of others) {
+      if (level !== 4 && !canSeeAt(o.x, o.y)) continue;
+      const cx = (o.x - cam.x) * scale, cy = (o.y - cam.y) * scale;
+      if (sx >= cx - 6 && sx <= cx + 6 * PEOPLE_SCALE + 6 && sy >= cy - 6 && sy <= cy + 8 * PEOPLE_SCALE + 6) return id;
+    }
+    return null;
   }
 
   // A firefly lights barely more than itself: its own pixel, dimly, and a
@@ -1101,8 +1240,17 @@
       for (let x = x0; x <= x1; x++) {
         const dx = x + 0.5 - cx, dy = y + 0.5 - cy;
         const d2 = dx * dx + dy * dy;
-        const v = d2 <= r2 ? 1 : d2 <= b1 ? 0.6 : d2 <= b2 ? 0.32 : d2 <= b3 ? 0.12 : 0;
+        let v = d2 <= r2 ? 1 : d2 <= b1 ? 0.6 : d2 <= b2 ? 0.32 : d2 <= b3 ? 0.12 : 0;
         if (!v) continue;
+        // Lamps (not lanterns, whose dither flickers) end in a clean round
+        // edge: solid out to the first band, then one checkerboard ring
+        // counted from their centre pixel, so it's even on every side.
+        if (tier < 0 && v < 1) {
+          if (v < 0.32) continue;
+          const ox = x - Math.floor(cx), oy = y - Math.floor(cy);
+          if (v < 0.6 && (ox + oy) & 1) continue;
+          v = 0.999;
+        }
         const i = y * vw + x;
         const tone = Math.min(1, Math.sqrt(d2) / (r + 2.5));
         if (tone < toneBuf[i]) toneBuf[i] = tone;
@@ -1641,11 +1789,19 @@
       if (t - o.last > 12000) { others.delete(id); continue; }
       o.x += (o.tx - o.x) * kk;
       o.y += (o.ty - o.y) * kk;
+      // A footprint every few steps, alternating left and right.
+      const last = o.steps[o.steps.length - 1];
+      if (!last || Math.hypot(o.x - last.x, o.y - last.y) >= 3) {
+        o.steps.push({ x: o.x, y: o.y, t, side: last && last.side === 0 ? 2 : 0 });
+        while (o.steps.length && t - o.steps[0].t > STEP_MS) o.steps.shift();
+      }
     }
 
     // Hover.
     let h = -1, overSecret = false;
-    if (pointer.inside && pointer.overCanvas && !pointer.touch && pointer.x != null && !drag.moved) {
+    if (pointer.inside && pointer.overCanvas && !pointer.touch && pointer.x != null && !drag.moved && walkerAt(pointer.x, pointer.y)) {
+      overSecret = true;
+    } else if (pointer.inside && pointer.overCanvas && !pointer.touch && pointer.x != null && !drag.moved) {
       const wx = Math.floor(cam.x + pointer.x / scale), wy = Math.floor(cam.y + pointer.y / scale);
       overSecret = !!secretAt(wx, wy) && canSeeAt(wx, wy);
       h = overSecret ? -1 : articleAt(wx, wy);
@@ -1759,6 +1915,9 @@
       }
       canvas.style.cursor = '';
     } else {
+      // Another walker first: a click on them is a wave.
+      const walker = walkerAt(e.clientX, e.clientY);
+      if (walker) { waveAt(walker); drag.moved = false; return; }
       const wx = Math.floor(cam.x + e.clientX / scale), wy = Math.floor(cam.y + e.clientY / scale);
       // Secrets first: the owl sits on top of a plant.
       const secret = canSeeAt(wx, wy) ? secretAt(wx, wy) : null;
@@ -1982,6 +2141,27 @@
       : !left ? 'no lanterns left today'
       : `${others ? 'lanterns glow here. leave yours' : 'leave a lantern'} (L) · ${left} left today`;
     pBtn.setAttribute('aria-label', pBtn.title);
+    updateCredit();
+  }
+
+  // Under the text: who left the lanterns glowing here, newest first.
+  const pCredit = $('#panel-credit');
+  function daysAgo(when) {
+    const d = Math.floor((Date.now() - new Date(when).getTime()) / 864e5);
+    return d <= 0 ? 'today' : d === 1 ? 'yesterday' : `${d} days ago`;
+  }
+  function updateCredit() {
+    const sp = cardSpot;
+    const cutoff = Date.now() - LANTERN_DAYS * 864e5;
+    const here = sp ? [...lanterns.values()]
+      .filter(l => l.article_title === sp.title && new Date(l.created_at).getTime() > cutoff)
+      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at)) : [];
+    pCredit.hidden = !here.length;
+    if (!here.length) return;
+    const who = l => (mine.has(l.id) ? 'you' : walkerName(l.walker) || 'someone');
+    const parts = here.slice(0, 2).map(l => `${who(l)}, ${daysAgo(l.created_at)}`);
+    const more = here.length - parts.length;
+    pCredit.textContent = `lantern${here.length > 1 ? 's' : ''} left by ${parts.join(' · ')}${more ? ` · and ${more} more` : ''}`;
   }
 
   // L leaves a lantern, or takes yours back: on the open article, else the one
@@ -2530,7 +2710,7 @@
     if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) {
       centerOn(saved.x, saved.y);
     } else if (secrets.library) {
-      centerOn(secrets.library.x, secrets.library.y); // first visit: at the library
+      centerOn(secrets.library.x + 0.5, secrets.library.y + 0.5); // first visit: on the library's middle pixel
     } else {
       const a = world.articles[Math.floor(Math.random() * world.articles.length)];
       centerOn(a[2] + (Math.random() - 0.5) * 30, a[3] + (Math.random() - 0.5) * 30);

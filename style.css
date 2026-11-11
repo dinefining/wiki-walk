@@ -47,6 +47,27 @@ body { transition: background-color 0s; }
   image-rendering: crisp-edges;
 }
 
+/* Film grain over the park (main.js draws the noise tile). Overlay blending
+   leaves the dark night nearly untouched and speckles what the light reaches. */
+#grain {
+  position: fixed;
+  inset: -64px;
+  z-index: 1;
+  pointer-events: none;
+  mix-blend-mode: overlay;
+  opacity: 0.55;
+  animation: grain 0.6s steps(1) infinite;
+}
+#grain[hidden] { display: none; }
+@keyframes grain {
+  0% { transform: translate(0, 0); }
+  20% { transform: translate(-23px, 17px); }
+  40% { transform: translate(31px, -9px); }
+  60% { transform: translate(-13px, -29px); }
+  80% { transform: translate(19px, 25px); }
+}
+@media (prefers-reduced-motion: reduce) { #grain { animation: none; } }
+
 /* ---- panel: flat blocks, stepped corners, no shadows ---- */
 
 /* .panel: the article panel and the planting panel share one look */
@@ -102,7 +123,13 @@ body { transition: background-color 0s; }
   font-size: 11px;
   color: var(--path);
 }
-#panel-kicker[hidden], #panel-link[hidden], #panel-lantern[hidden] { display: none; }
+#panel-credit {
+  margin: calc(var(--p) * 2) 0 0;
+  font-family: 'Silkscreen', monospace;
+  font-size: 11px;
+  color: var(--path);
+}
+#panel-kicker[hidden], #panel-link[hidden], #panel-lantern[hidden], #panel-credit[hidden] { display: none; }
 .panel-text {
   margin: 0 0 calc(var(--p) * 4);
   color: var(--ink-soft);
@@ -147,7 +174,8 @@ body { transition: background-color 0s; }
 }
 
 /* The article card: a frame (#panel) holding a scrolling body (.panel) and,
-   stuck to its left edge at the top like tabs, the lantern and a close button. */
+   stuck to its left edge at the top like tabs, the lantern and a close button
+   (on phones, along its top edge instead). */
 :root { --tab-w: 30px; }
 #panel {
   position: fixed;
@@ -442,7 +470,35 @@ body { transition: background-color 0s; }
 #toast[hidden] { display: none; }
 
 @media (max-width: 560px) {
-  #panel { left: calc(16px + var(--tab-w)); right: 16px; width: auto; }
+  /* On phones the card runs the full width, like the stats bar, and its
+     tabs sit on its top edge at the right: the lantern, then ×. */
+  #panel { left: 16px; right: 16px; width: auto; }
+  #panel-tabs {
+    top: calc(var(--tab-w) * -1 + 1px);
+    left: auto;
+    right: 0;
+    width: auto;
+    flex-direction: row-reverse;
+    /* stepped corners on the outside (top) only */
+    clip-path: polygon(
+      var(--p) 0, calc(100% - var(--p)) 0, calc(100% - var(--p)) var(--p), 100% var(--p),
+      100% 100%, 0 100%, 0 var(--p), var(--p) var(--p)
+    );
+  }
+  #panel-tabs button { padding: 2px 0 0; }
+  #panel-tabs button + button { border-top: 0; border-right: 2px solid var(--panel-deep); }
+  #panel > .panel {
+    /* square top-right corner where the tabs join */
+    clip-path: polygon(
+      var(--p) 0, 100% 0, 100% calc(100% - var(--p)), calc(100% - var(--p)) calc(100% - var(--p)),
+      calc(100% - var(--p)) 100%, var(--p) 100%, var(--p) calc(100% - var(--p)), 0 calc(100% - var(--p)),
+      0 var(--p), var(--p) var(--p)
+    );
+    /* A long article can grow up to the top buttons, tabs included, with
+       the same gap above as below (to the stats bar). */
+    max-height: calc(100vh - 60px - 16px - var(--hud) - 14px - var(--tab-w));
+    max-height: calc(100dvh - 60px - 16px - var(--hud) - 14px - var(--tab-w));
+  }
   .panel {
     left: 16px;
     right: 16px;
